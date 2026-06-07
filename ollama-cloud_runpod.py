@@ -56,6 +56,69 @@ def continue_command(title: str) -> list:
         return context
     
 
+async def prompt_input(context,session_name) -> tuple[list,str,str,int]:
+    """Prompt user for input asynchronously."""
+
+    prompt = await asyncio.get_event_loop().run_in_executor(
+        None, lambda: input("> ")
+    )
+
+    if prompt[:9] == "/continue":
+        if prompt[10:]:
+            session_name = convert_title_file(prompt[10:])
+            context = continue_command(convert_title_file(prompt[10:]))
+            return context,"",session_name
+
+        session_list = [item.name for item in Path(CONVERSATION_PATH).iterdir()]
+        if not session_list:
+            print("No previous conversation")
+            return context,"",session_name
+
+        question = [
+            inquirer.List(
+                'conversation',
+                message="Select a previous conversation",
+                choices=session_list,
+            )
+        ]
+
+        answer = inquirer.prompt(question)
+
+        if answer:
+            session_name = answer["conversation"]
+            context = continue_command(answer["conversation"])
+            return context,"",session_name
+
+        print("No selected conversation")
+        return context,"",session_name
+    elif prompt[:5] == "/save":
+        if session_name:
+            with open(fr"{CONVERSATION_PATH}{session_name}",'w',encoding='utf-8') as file:
+                for line in context:
+                    file.write(f'{line}\n')
+        elif prompt[6:]:
+            session_name = convert_title_file(prompt[6:])
+            with open(fr"{CONVERSATION_PATH}{convert_title_file(prompt[6:])}",'w',encoding='utf-8') as file:
+                for line in context:
+                    file.write(f'{line}\n')
+        return context,"",session_name
+    elif prompt[:5] == "/exit":
+        if session_name:
+            with open(fr"{CONVERSATION_PATH}{session_name}",'w',encoding='utf-8') as file:
+                for line in context:
+                    file.write(f'{line}\n')
+        elif prompt[6:]:
+            with open(fr"{CONVERSATION_PATH}{convert_title_file(prompt[6:])}",'w',encoding='utf-8') as file:
+                for line in context:
+                    file.write(f'{line}\n')
+        print("\nExit ollama cloud")
+        return context,"/exit",session_name
+    elif prompt[:7] == "/change":
+        print("you change url to runpod")
+    else:
+        context.append({"role":"user","content":prompt})
+        return context
+
 async def fetch_data(url: str, model: str, context) -> Tuple[str,int]:
     """
     Send prompts to the Ollama API and display responses.
@@ -159,59 +222,11 @@ async def main():
             None, lambda: input("> ")
         )
 
-        if prompt[:9] == "/continue":
-            if prompt[10:]:
-                session_name = convert_title_file(prompt[10:])
-                context = continue_command(convert_title_file(prompt[10:]))
-                continue
-
-            session_list = [item.name for item in Path(CONVERSATION_PATH).iterdir()]
-            if not session_list:
-                print("No previous conversation")
-                continue
-
-            question = [
-                inquirer.List(
-                    'conversation',
-                    message="Select a previous conversation",
-                    choices=session_list,
-                )
-            ]
-
-            answer = inquirer.prompt(question)
-
-            if answer:
-                session_name = answer["conversation"]
-                context = continue_command(answer["conversation"])
-                continue
-
-            print("No selected conversation")
-            continue
-        elif prompt[:5] == "/save":
-            session_name = convert_title_file(prompt[6:])
-            with open(fr"{CONVERSATION_PATH}{convert_title_file(prompt[6:])}",'w',encoding='utf-8') as file:
-                for line in context:
-                    file.write(f'{line}\n')
-            continue
-        elif prompt[:5] == "/exit":
-            if session_name:
-                with open(fr"{CONVERSATION_PATH}{session_name}",'w',encoding='utf-8') as file:
-                    for line in context:
-                        file.write(f'{line}\n')
-            elif prompt[6:]:
-                with open(fr"{CONVERSATION_PATH}{convert_title_file(prompt[6:])}",'w',encoding='utf-8') as file:
-                    for line in context:
-                        file.write(f'{line}\n')
-            print("\nExit ollama cloud")
+        if prompt == "/exit":
             break
-        elif prompt[:7] == "/change":
-            print("you change url to runpod")
-        else:
-            context.append({"role":"user","content":prompt})
-    
         if model and prompt:
-            # Start chat session
-            await fetch_data(URL, model, context)
+            print("running...")
+            # await fetch_data(URL, model, context)
         else:
             print("Failed to initialize. Exiting.")
 

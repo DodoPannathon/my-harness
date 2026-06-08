@@ -5,15 +5,16 @@ from pathlib import Path
 load_dotenv()
 api_key = os.getenv('API_KEY')
 base_path = Path(__file__).resolve().parent
-conversation_path = base_path / "conversation"
+conversation_path = base_path / "conversations"
 
-print(conversation_path.exists())
 if not conversation_path.exists():
- print("creat new conversation dir")
- Path("conversation").mkdir()
+ print("creat new conversations dir")
+ conversation_path.mkdir()
 
-print(api_key)
-print(conversation_path)
-with open(f"{conversation_path}/test.txt",'r',encoding='utf-8') as file:
- lines = file.readlines()
- print(lines)
+if (conversation_path / "test.txt").exists():
+    test = "test.txt"
+    with open(conversation_path / test, 'r', encoding='utf-8') as file:
+        lines = file.readlines()
+        print(lines)
+else:
+    print("file does not exist")

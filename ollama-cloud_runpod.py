@@ -19,7 +19,12 @@ load_dotenv()
 # Configuration
 URL = os.getenv("URLS").split(',')[0]
 API_KEY = os.getenv("API_KEY")
-CONVERSATION_PATH = os.getenv("CONVERSATION_PATH")
+BASE_PATH = Path(__file__).resolve().parent
+CONVERSATION_PATH = BASE_PATH / "conversations"
+
+if not CONVERSATION_PATH.exists():
+    print("Creating conversations directory...")
+    CONVERSATION_PATH.mkdir()
 
 headers = {
     "Authorization": f"Bearer {API_KEY}",
@@ -41,7 +46,7 @@ def convert_title_file(title: str) -> str:
     return f"{title.replace(' ','_')}.txt"
 
 def continue_command(title: str) -> list:
-    with open(fr"{CONVERSATION_PATH}{title}",'r',encoding='utf-8') as file:
+    with open(CONVERSATION_PATH / title, 'r', encoding='utf-8') as file:
         print("=" * 50)
         context = []
         lines = file.readlines()
@@ -56,7 +61,7 @@ def continue_command(title: str) -> list:
         return context
     
 
-async def prompt_input(context,session_name) -> tuple[list,str,str,int]:
+async def prompt_input(context,session_name) -> tuple[list,str,str]:
     """Prompt user for input asynchronously."""
 
     prompt = await asyncio.get_event_loop().run_in_executor(
@@ -93,22 +98,22 @@ async def prompt_input(context,session_name) -> tuple[list,str,str,int]:
         return context,"",session_name
     elif prompt[:5] == "/save":
         if session_name:
-            with open(fr"{CONVERSATION_PATH}{session_name}",'w',encoding='utf-8') as file:
+            with open(CONVERSATION_PATH / session_name, 'w', encoding='utf-8') as file:
                 for line in context:
                     file.write(f'{line}\n')
         elif prompt[6:]:
             session_name = convert_title_file(prompt[6:])
-            with open(fr"{CONVERSATION_PATH}{convert_title_file(prompt[6:])}",'w',encoding='utf-8') as file:
+            with open(CONVERSATION_PATH / convert_title_file(prompt[6:]), 'w', encoding='utf-8') as file:
                 for line in context:
                     file.write(f'{line}\n')
         return context,"",session_name
     elif prompt[:5] == "/exit":
         if session_name:
-            with open(fr"{CONVERSATION_PATH}{session_name}",'w',encoding='utf-8') as file:
+            with open(CONVERSATION_PATH / session_name, 'w', encoding='utf-8') as file:
                 for line in context:
                     file.write(f'{line}\n')
         elif prompt[6:]:
-            with open(fr"{CONVERSATION_PATH}{convert_title_file(prompt[6:])}",'w',encoding='utf-8') as file:
+            with open(CONVERSATION_PATH / convert_title_file(prompt[6:]), 'w', encoding='utf-8') as file:
                 for line in context:
                     file.write(f'{line}\n')
         print("\nExit ollama cloud")
@@ -117,7 +122,7 @@ async def prompt_input(context,session_name) -> tuple[list,str,str,int]:
         print("you change url to runpod")
     else:
         context.append({"role":"user","content":prompt})
-        return context
+        return context,prompt,session_name
 
 async def fetch_data(url: str, model: str, context) -> Tuple[str,int]:
     """
@@ -218,15 +223,15 @@ async def main():
     while True:
         print('=' * 50)
 
-        prompt = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: input("> ")
-        )
+        context,prompt,session_name = await prompt_input(context,session_name)
 
         if prompt == "/exit":
             break
         if model and prompt:
             print("running...")
             # await fetch_data(URL, model, context)
+        elif model and not prompt:
+            pass
         else:
             print("Failed to initialize. Exiting.")
 

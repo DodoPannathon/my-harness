@@ -16,10 +16,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Configuration
-URL = os.getenv("URLS").split(',')[0]
+URL = os.getenv("URLS")
 
 headers = {
-    "Authorization": "Bearer api_key",
+    "Authorization": "Bearer " + os.getenv("API_KEY"),
     "Content-Type": "application/json"
 }
 

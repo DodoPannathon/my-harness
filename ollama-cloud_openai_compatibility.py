@@ -17,6 +17,11 @@ load_dotenv()
 
 # Configuration
 URL = os.getenv("URLS")
+BASE_PATH = Path(__file__).resolve().parent
+CONVERSATION_PATH = BASE_PATH / "conversations"
+
+if not CONVERSATION_PATH.exists():
+    CONVERSATION_PATH.mkdir()
 
 headers = {
     "Authorization": "Bearer " + os.getenv("API_KEY"),
@@ -91,7 +96,7 @@ def convert_title_file(title: str) -> str:
     return f"{title.replace(' ','_')}.txt"
 
 def continue_command(title: str) -> list:
-    with open(fr"D:\User\Documents\coding\python\cloud_ai\conversation\{title}",'r',encoding='utf-8') as file:
+    with open(CONVERSATION_PATH / title, 'r', encoding='utf-8') as file:
         print("=" * 50)
         context = []
         lines = file.readlines()
@@ -135,7 +140,7 @@ async def fetch_data(url: str, model: str) -> None:
         )
 
         if prompt == "/list":
-            for item in Path(r'D:\User\Documents\coding\python\cloud_ai\conversation').iterdir():
+            for item in CONVERSATION_PATH.iterdir():
                 print(item.name)
             print()
             continue
@@ -145,7 +150,7 @@ async def fetch_data(url: str, model: str) -> None:
                 context = continue_command(convert_title_file(prompt[10:]))
                 continue
 
-            session_list = [item.name for item in Path(r'D:\User\Documents\coding\python\cloud_ai\conversation').iterdir()]
+            session_list = [item.name for item in CONVERSATION_PATH.iterdir()]
             if not session_list:
                 print("No previous conversation")
                 continue
@@ -176,11 +181,11 @@ async def fetch_data(url: str, model: str) -> None:
             continue
         elif prompt[:5] == "/exit":
             if session_name:
-                with open(fr"D:\User\Documents\coding\python\cloud_ai\conversation\{session_name}",'w',encoding='utf-8') as file:
+                with open(CONVERSATION_PATH / session_name, 'w', encoding='utf-8') as file:
                     for line in context:
                         file.write(f'{line}\n')
             elif prompt[6:]:
-                with open(fr"D:\User\Documents\coding\python\cloud_ai\conversation\{convert_title_file(prompt[6:])}",'w',encoding='utf-8') as file:
+                with open(CONVERSATION_PATH / convert_title_file(prompt[6:]), 'w', encoding='utf-8') as file:
                     for line in context:
                         file.write(f'{line}\n')
             print("\nExit ollama cloud")

@@ -229,6 +229,9 @@ async def fetch_data(url: str, model: str) -> None:
                             line = line.decode('utf-8').strip()
                             if line.startswith('data: '):
                                 data_str = line[6:].strip()  # Remove 'data: ' prefix
+                                if data_str == "[DONE]":
+                                    break
+
                                 try:
                                     chunk = json.loads(data_str)
                                     choices = chunk.get("choices", [])
@@ -250,11 +253,13 @@ async def fetch_data(url: str, model: str) -> None:
                                         if delta.get("finish_reason") == "stop":
                                             if not last_was_reasoning:
                                                 print()
-                                            print(f"\n{'=' * 50}")
                                             break
                                 except json.JSONDecodeError:
-                                    print("json decode error")
+                                    print("\033[91mjson decode error\033[0m")
                                     continue
+
+                        if full_response:
+                            print(f"\n{'=' * 50}")
 
                         context.append({"role":"assistant","content":full_response})
 

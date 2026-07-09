@@ -1,5 +1,4 @@
 aiohttp
 inquirer
 python-dotenv
-openai
 requests

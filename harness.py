@@ -101,7 +101,7 @@ def continue_command(title: str) -> list:
         context = []
         lines = file.readlines()
         for line in lines:
-            line_object = ast.literal_eval(line[:-1])
+            line_object = ast.literal_eval(line.rstrip('\n'))
             context.append(line_object)
             if line_object["role"] == "user":
                 print(f"> {line_object["content"]}")
@@ -132,7 +132,7 @@ async def fetch_data(url: str, model: str) -> None:
 
     while True:
         full_response = ""
-        stream_reasoning = True
+        last_was_reasoning = True
 
         # Use asyncio-compatible input
         prompt = await asyncio.get_event_loop().run_in_executor(
@@ -145,9 +145,10 @@ async def fetch_data(url: str, model: str) -> None:
             print()
             continue
         elif prompt[:9] == "/continue":
-            if prompt[10:]:
-                session_name = convert_title_file(prompt[10:])
-                context = continue_command(convert_title_file(prompt[10:]))
+            conv_name = prompt[9:].strip()
+            if conv_name:
+                session_name = convert_title_file(conv_name)
+                context = continue_command(session_name)
                 continue
 
             session_list = [item.name for item in CONVERSATION_PATH.iterdir()]
@@ -173,8 +174,14 @@ async def fetch_data(url: str, model: str) -> None:
             print("No selected conversation")
             continue
         elif prompt[:5] == "/save":
-            session_name = convert_title_file(prompt[6:])
-            with open(fr"D:\User\Documents\coding\python\cloud_ai\conversation\{convert_title_file(prompt[6:])}",'w',encoding='utf-8') as file:
+            if prompt[6:].strip():
+                session_name = convert_title_file(prompt[6:].strip())
+            elif session_name:
+                pass
+            else:
+                print("No session name provided")
+                continue
+            with open(CONVERSATION_PATH / session_name, 'w', encoding='utf-8') as file:
                 for line in context:
                     file.write(f'{line}\n')
             print("=" * 50)
@@ -222,6 +229,9 @@ async def fetch_data(url: str, model: str) -> None:
                             line = line.decode('utf-8').strip()
                             if line.startswith('data: '):
                                 data_str = line[6:].strip()  # Remove 'data: ' prefix
+                                if data_str == "[DONE]":
+                                    break
+
                                 try:
                                     chunk = json.loads(data_str)
                                     choices = chunk.get("choices", [])
@@ -232,22 +242,24 @@ async def fetch_data(url: str, model: str) -> None:
                                             full_response += content
                                             print(content, end="", flush=True)
 
-                                        try:
-                                            reasoning = delta.get("reasoning", "")
+                                        reasoning = delta.get("reasoning", "")
+                                        if reasoning:
                                             print(f"\033[90m{reasoning}\033[0m", end="", flush=True)
-                                        except:
-                                            if stream_reasoning:
-                                                print()
-                                            stream_reasoning = False
-                                            pass
+                                            last_was_reasoning = True
+                                        else:
+                                            last_was_reasoning = False
 
                                         # Check if stream is done
                                         if delta.get("finish_reason") == "stop":
-                                            print(f"\n{'=' * 50}")
+                                            if not last_was_reasoning:
+                                                print()
                                             break
                                 except json.JSONDecodeError:
-                                    print("json decode error")
+                                    print("\033[91mjson decode error\033[0m")
                                     continue
+
+                        if full_response:
+                            print(f"\n{'=' * 50}")
 
                         context.append({"role":"assistant","content":full_response})
 

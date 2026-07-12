@@ -2,3 +2,4 @@ aiohttp
 inquirer
 python-dotenv
 requests
+rich

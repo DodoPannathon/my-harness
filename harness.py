@@ -1,5 +1,5 @@
 """
-Ollama Cloud AI Client - OpenAI Compatible Mode
+Ollama Cloud AI Client - Textual TUI
 Interactive model selector with async HTTP requests and spinner
 Uses OpenAI /v1/chat/completions API format
 """
@@ -11,8 +11,20 @@ import os
 from pathlib import Path
 
 import aiohttp
-import inquirer
 from dotenv import load_dotenv
+from textual import on
+from textual.app import App, ComposeResult, Screen
+from textual.containers import Container
+from textual.screen import ModalScreen
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    LoadingIndicator,
+    Select,
+)
 
 load_dotenv()
 
@@ -30,70 +42,7 @@ headers = {
     "Content-Type": "application/json",
 }
 
-
-async def select_model(url: str) -> str | None:
-    """
-    Fetch available models from Ollama API and let user select one.
-
-    Args:
-        url: Base URL of the Ollama API
-
-    Returns:
-        Selected model name or None if selection failed
-    """
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{url}/v1/models", headers=headers) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    models = [m["id"] for m in result.get("data", [])]
-
-                    if not models:
-                        print("No models available on server")
-                        return None
-
-                    question = [
-                        inquirer.List(
-                            "model",
-                            message="Select a model",
-                            choices=models,
-                        )
-                    ]
-
-                    answer = inquirer.prompt(question)
-
-                    if answer:
-                        selected_model = answer["model"]
-                        print(f"\n✓ You selected: {selected_model}")
-                        return selected_model
-                    else:
-                        print("\nNo selection made")
-                        return None
-                else:
-                    print(f"Failed to fetch model data: {response.status}")
-                    return None
-
-    except KeyboardInterrupt:
-        print("\nInterrupted by user")
-        return None
-    except aiohttp.ClientError as e:
-        print(f"Network error: {e}")
-        return None
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        return None
-
-
-async def spinner_task():
-    """Display a loading spinner animation."""
-    SPINNER_CHARS = "|/-\\"
-    try:
-        while True:
-            for char in SPINNER_CHARS:
-                print(f"\r{char}", end="", flush=True)
-                await asyncio.sleep(0.1)
-    except asyncio.CancelledError:
-        pass
+COMMANDS_FOOTER = "/list      /continue      /save      /exit"
 
 
 def convert_title_file(title: str) -> str:
@@ -124,16 +73,8 @@ def format_sessions(sessions: list[str]) -> str:
     return "\n".join(lines)
 
 
-def render_footer(text: str) -> None:
-    """Render text on the footer line (second-to-last line, above input prompt)."""
-    print(" " * 80, end="\r", flush=True)
-    print(f"\033[90m{text}\033[0m", end="", flush=True)
-    print("\033[F", end="")
-
-
 def continue_command(title: str) -> list:
     with open(CONVERSATION_PATH / title, "r", encoding="utf-8") as file:
-        print("=" * 50)
         context = []
         lines = file.readlines()
         for line in lines:
@@ -142,222 +83,374 @@ def continue_command(title: str) -> list:
             if line_object["role"] == "user":
                 print(f"> {line_object['content']}")
             elif line_object["role"] == "assistant":
-                print(line_object["content"])
+                print(line_object['content'])
             print("=" * 50)
         return context
 
 
-COMMANDS_FOOTER = "/list      /continue      /save      /exit"
+class SessionPickerScreen(ModalScreen):
+    """Modal screen for picking a session to continue."""
+
+    CSS = """
+    SessionPickerScreen {
+        align: center middle;
+        width: 60;
+        height: 20;
+        background: $surface;
+        border: solid $primary;
+    }
+
+    #session-list {
+        margin: 1;
+    }
+    """
+
+    def __init__(self, sessions: list[str]) -> None:
+        super().__init__()
+        self.sessions = sessions
+        self.selected_session: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Label("Select a previous conversation:")
+        yield Select(
+            [(s, s) for s in self.sessions],
+            id="session-select",
+        )
+
+    @on(Select.Changed)
+    def selection_changed(self, event: Select.Changed) -> None:
+        self.selected_session = event.value
+
+    @on(Input.Submitted)
+    def submit(self) -> None:
+        if self.selected_session:
+            self.dismiss(self.selected_session)
 
 
-async def prompt_input(context: list, session_name: str) -> tuple[list, str, str]:
-    """Prompt user for input asynchronously and handle commands."""
+class SelectScreen(ModalScreen):
+    """Screen for selecting a model."""
 
-    prompt = await asyncio.get_event_loop().run_in_executor(None, lambda: input("> "))
+    CSS = """
+    SelectScreen {
+        align: center middle;
+        width: 60;
+        height: 15;
+        background: $surface;
+        border: solid $primary;
+    }
+    """
 
-    if prompt == "/list":
-        sessions = get_sorted_sessions()
-        render_footer(format_sessions(sessions))
-        return context, "", session_name
-    elif prompt[:9] == "/continue":
-        conv_name = prompt[9:].strip()
-        if conv_name:
-            session_name = convert_title_file(conv_name)
-            context = continue_command(session_name)
-            render_footer(COMMANDS_FOOTER)
-            return context, "", session_name
+    def __init__(self) -> None:
+        super().__init__()
+        self.selected_model: str | None = None
 
-        sessions = get_sorted_sessions()
-        if not sessions:
-            render_footer("No previous conversation")
-            return context, "", session_name
+    def compose(self) -> ComposeResult:
+        yield Label("Loading models...")
+        yield LoadingIndicator()
+        yield Button("Select", id="select-submit")
 
-        render_footer(format_sessions(sessions))
+    async def on_mount(self) -> None:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{URL}/v1/models", headers=headers
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        models = [m["id"] for m in result.get("data", [])]
 
-        question = [
-            inquirer.List(
-                "conversation",
-                message="Select a previous conversation",
-                choices=sessions,
+                        if not models:
+                            self.query_one(Label).update(
+                                "No models available on server"
+                            )
+                            return
+
+                        self.query_one(Label).remove()
+                        self.query_one(LoadingIndicator).remove()
+                        select = Select(
+                            [(m, m) for m in models],
+                            id="model-select",
+                        )
+                        self.mount(select)
+                        select.focus()
+                    else:
+                        self.query_one(Label).update(
+                            f"Failed to fetch model data: {response.status}"
+                        )
+        except Exception as e:
+            self.query_one(Label).update(f"Error: {e}")
+
+    @on(Select.Changed)
+    def selection_changed(self, event: Select.Changed) -> None:
+        self.selected_model = event.value
+
+    @on(Button.Pressed)
+    def submit(self) -> None:
+        if self.selected_model:
+            self.dismiss(self.selected_model)
+
+    def on_key(self, event) -> None:
+        if event.key == "enter" and self.selected_model:
+            self.dismiss(self.selected_model)
+
+
+class MainScreen(Screen):
+    """Main chat screen."""
+
+    CSS = """
+    MainScreen {
+        layout: vertical;
+    }
+
+    #conversation-log {
+        height: 1fr;
+        overflow-y: auto;
+        border: none;
+    }
+
+    #input-bar {
+        height: 3;
+        layout: horizontal;
+    }
+
+    #prompt-label {
+        width: 3;
+        content-align: center middle;
+        text-style: bold;
+    }
+
+    #user-input {
+        width: 1fr;
+    }
+
+    #status-line {
+        height: 1;
+        background: $boost;
+        color: $text;
+        content-align: center middle;
+    }
+
+    #spinner-container {
+        height: 1;
+        display: none;
+        content-align: center middle;
+    }
+    """
+
+    BINDINGS = [
+        ("up", "history_up", "Prev"),
+        ("down", "history_down", "Next"),
+    ]
+
+    def __init__(self, model: str) -> None:
+        super().__init__()
+        self.model = model
+        self.messages: list[dict] = []
+        self.session_name: str = ""
+        self.input_history: list[str] = []
+        self._history_index: int = -1
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Label("", id="conversation-log")
+        with Container(id="input-bar"):
+            yield Label(">", id="prompt-label")
+            yield Input(
+                id="user-input",
             )
-        ]
+        yield Label("", id="status-line")
+        yield Container(LoadingIndicator(), id="spinner-container")
+        yield Footer()
 
-        answer = inquirer.prompt(question)
+    def on_mount(self) -> None:
+        self.update_status()
 
-        if answer:
-            session_name = answer["conversation"]
-            context = continue_command(convert_title_file(session_name))
-            render_footer(COMMANDS_FOOTER)
-            return context, "", session_name
+    def update_status(self) -> None:
+        status_text = f"Model: {self.model}  |  {COMMANDS_FOOTER}"
+        self.query_one("#status-line", Label).update(status_text)
 
-        render_footer(COMMANDS_FOOTER)
-        return context, "", session_name
-    elif prompt[:5] == "/save":
-        if prompt[6:].strip():
-            session_name = convert_title_file(prompt[6:].strip())
-        elif session_name:
-            pass
-        else:
-            print("No session name provided")
-            render_footer(COMMANDS_FOOTER)
-            return context, "", session_name
-        with open(CONVERSATION_PATH / session_name, "w", encoding="utf-8") as file:
-            for line in context:
-                file.write(f"{line}\n")
-        print("=" * 50)
-        render_footer(COMMANDS_FOOTER)
-        return context, "", session_name
-    elif prompt[:5] == "/exit":
-        if session_name:
-            with open(CONVERSATION_PATH / session_name, "w", encoding="utf-8") as file:
-                for line in context:
-                    file.write(f"{line}\n")
-        elif prompt[6:]:
+    def set_loading(self, loading: bool) -> None:
+        spinner_container = self.query_one("#spinner-container", Container)
+        spinner_container.display = loading
+
+    def append_message(self, role: str, content: str) -> None:
+        log = self.query_one("#conversation-log", Label)
+        prefix = "> " if role == "user" else ""
+        new_text = log.text + f"\n{prefix}{content}\n{'=' * 50}\n"
+        log.update(new_text)
+
+    def append_streaming(self, content: str) -> None:
+        log = self.query_one("#conversation-log", Label)
+        log.update(log.text + content)
+
+    async def handle_input(self, prompt: str) -> None:
+        if prompt == "/list":
+            sessions = get_sorted_sessions()
+            self.append_message("system", format_sessions(sessions))
+            return
+
+        if prompt[:9] == "/continue":
+            conv_name = prompt[9:].strip()
+            if conv_name:
+                session_name = convert_title_file(conv_name)
+                self.messages = continue_command(session_name)
+                self.session_name = session_name
+                self.append_message("system", f"Continued session: {session_name}")
+                self.update_status()
+                return
+
+            sessions = get_sorted_sessions()
+            if not sessions:
+                self.append_message("system", "No previous conversation")
+                return
+
+            picker = SessionPickerScreen(sessions)
+            session = await self.app.push_screen_modal(picker)  # type: ignore[attr-defined]
+            if session:
+                session_name = convert_title_file(session)
+                self.messages = continue_command(session_name)
+                self.session_name = session_name
+                self.append_message("system", f"Continued session: {session_name}")
+                self.update_status()
+            return
+
+        if prompt[:5] == "/save":
+            save_name = prompt[6:].strip()
+            if save_name:
+                self.session_name = convert_title_file(save_name)
+            elif not self.session_name:
+                self.append_message("system", "No session name provided")
+                return
             with open(
-                CONVERSATION_PATH / convert_title_file(prompt[6:]),
-                "w",
-                encoding="utf-8",
+                CONVERSATION_PATH / self.session_name, "w", encoding="utf-8"
             ) as file:
-                for line in context:
+                for line in self.messages:
                     file.write(f"{line}\n")
-        print("\nExit ollama cloud")
-        return context, "/exit", session_name
-    else:
-        context.append({"role": "user", "content": prompt})
-        return context, prompt, session_name
+            self.append_message("system", f"Saved session: {self.session_name}")
+            self.update_status()
+            return
 
+        if prompt[:5] == "/exit":
+            if self.session_name:
+                with open(
+                    CONVERSATION_PATH / self.session_name, "w", encoding="utf-8"
+                ) as file:
+                    for line in self.messages:
+                        file.write(f"{line}\n")
+            elif prompt[6:]:
+                with open(
+                    CONVERSATION_PATH / convert_title_file(prompt[6:]),
+                    "w",
+                    encoding="utf-8",
+                ) as file:
+                    for line in self.messages:
+                        file.write(f"{line}\n")
+            self.app.exit()  # type: ignore[attr-defined]
+            return
 
-async def fetch_data(url: str, model: str, context: list) -> str:
-    """
-    Send prompts to the Ollama API and display responses.
+        # Normal message
+        self.messages.append({"role": "user", "content": prompt})
+        self.append_message("user", prompt)
+        self.input_history.append(prompt)
 
-    Args:
-        url: Base URL of the Ollama API
-        model: Selected model name
-        context: Conversation history
+        await self.send_to_api()
 
-    Returns:
-        Full response string
-    """
+    async def send_to_api(self) -> None:
+        self.set_loading(True)
+        full_response = ""
 
-    full_response = ""
-
-    payload = {"model": model, "messages": context, "stream": True}
-
-    async with aiohttp.ClientSession() as session:
-        # Start spinner
-        spinner_task_handle = asyncio.create_task(spinner_task())
+        payload = {"model": self.model, "messages": self.messages, "stream": True}
 
         try:
-            async with session.post(
-                f"{url}/v1/chat/completions", json=payload, headers=headers
-            ) as response:
-                if response.status == 200:
-                    # Cancel spinner before printing response
-                    spinner_task_handle.cancel()
-                    try:
-                        await spinner_task_handle
-                    except asyncio.CancelledError:
-                        pass
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{URL}/v1/chat/completions", json=payload, headers=headers
+                ) as response:
+                    if response.status == 200:
+                        self.set_loading(False)
+                        async for line in response.content:
+                            line = line.decode("utf-8").strip()
+                            if line.startswith("data: "):
+                                data_str = line[6:].strip()
+                                if data_str == "[DONE]":
+                                    break
 
-                    # Clear the spinner line and print response
-                    print("\r" + " " * 50 + "\r", end="", flush=True)
+                                try:
+                                    chunk = json.loads(data_str)
+                                    choices = chunk.get("choices", [])
+                                    if choices:
+                                        delta = choices[0].get("delta", {})
+                                        content = delta.get("content", "")
+                                        if content:
+                                            full_response += content
+                                            self.append_streaming(content)
+                                except json.JSONDecodeError:
+                                    continue
 
-                    async for line in response.content:
-                        line = line.decode("utf-8").strip()
-                        if line.startswith("data: "):
-                            data_str = line[6:].strip()  # Remove 'data: ' prefix
-                            if data_str == "[DONE]":
-                                break
+                        if full_response:
+                            self.messages.append(
+                                {"role": "assistant", "content": full_response}
+                            )
+                    else:
+                        self.set_loading(False)
+                        self.append_message("system", f"Failed: {response.status}")
+        except Exception as e:
+            self.set_loading(False)
+            self.append_message("system", f"Error: {e}")
 
-                            try:
-                                chunk = json.loads(data_str)
-                                choices = chunk.get("choices", [])
-                                if choices:
-                                    delta = choices[0].get("delta", {})
-                                    content = delta.get("content", "")
-                                    if content:
-                                        full_response += content
-                                        print(content, end="", flush=True)
+    @on(Input.Submitted)
+    def handle_submit(self, event: Input.Submitted) -> None:
+        prompt = event.value.strip()
+        if prompt:
+            self.set_loading(True)
+            asyncio.create_task(self.handle_input(prompt))
+            event.input.clear()
 
-                                    reasoning = delta.get("reasoning_content", "")
-                                    if reasoning:
-                                        print(
-                                            f"\033[90m{reasoning}\033[0m",
-                                            end="",
-                                            flush=True,
-                                        )
+    def action_history_up(self) -> None:
+        if not self.input_history:
+            return
+        if self._history_index == -1:
+            self._history_index = len(self.input_history) - 1
+        elif self._history_index > 0:
+            self._history_index -= 1
+        self.query_one("#user-input", Input).value = self.input_history[
+            self._history_index
+        ]
 
-                                    # Check if stream is done
-                                    if delta.get("finish_reason") == "stop":
-                                        break
-                            except json.JSONDecodeError:
-                                print("\033[91mjson decode error\033[0m")
-                                continue
-
-                    if full_response:
-                        print()
-
-                else:
-                    print(f"\nFailed to fetch data: {response.status}")
-        except aiohttp.ClientError as e:
-            print(f"\nNetwork error: {e}")
-        except json.JSONDecodeError as e:
-            print(f"\nFailed to parse response: {e}")
-        except KeyError as e:
-            print(f"\nUnexpected response format: {e}")
-        finally:
-            # Ensure spinner is cancelled
-            if not spinner_task_handle.done():
-                spinner_task_handle.cancel()
-                try:
-                    await spinner_task_handle
-                except asyncio.CancelledError:
-                    pass
-
-    return full_response
-
-
-async def main():
-    """Main entry point for the Ollama Cloud AI client."""
-    print("=" * 50)
-    print("  Ollama Cloud AI Client")
-    print("=" * 50)
-
-    # Select model
-    model = await select_model(URL)
-
-    if not model:
-        print("Failed to initialize. Exiting.")
-        return
-
-    session_name = ""
-    context = []
-
-    print(f"\nConnected to model: {model}")
-    print("Type your prompts (/exit to exit)\n")
-
-    render_footer(COMMANDS_FOOTER)
-
-    while True:
-        print("=" * 50)
-
-        context, prompt, session_name = await prompt_input(context, session_name)
-
-        if prompt == "/exit":
-            break
-        if model and prompt:
-            full_response = await fetch_data(URL, model, context)
-            if full_response:
-                context.append({"role": "assistant", "content": full_response})
-        elif model and not prompt:
-            pass
+    def action_history_down(self) -> None:
+        if self._history_index == -1:
+            return
+        if self._history_index < len(self.input_history) - 1:
+            self._history_index += 1
+            self.query_one("#user-input", Input).value = self.input_history[
+                self._history_index
+            ]
         else:
-            print("Failed to initialize. Exiting.")
+            self._history_index = -1
+            self.query_one("#user-input", Input).value = ""
+
+
+class HarnessApp(App):
+    """Main application."""
+
+    CSS = """
+    Screen {
+        layout: vertical;
+    }
+    """
+
+    def on_mount(self) -> None:
+        self.push_screen(SelectScreen(), self.on_model_selected)
+
+    def on_model_selected(self, model: str) -> None:
+        """Called when SelectScreen is dismissed with a model."""
+        if not model:
+            self.exit()
+            return
+
+        self.push_screen(MainScreen(model))
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("\nExit ollama cloud")
+    app = HarnessApp()
+    app.run()
